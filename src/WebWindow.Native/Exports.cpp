@@ -130,6 +130,11 @@ extern "C"
 		instance->SetTopmost(topmost);
 	}
 
+	EXPORTED void WebWindow_SetFrameless(WebWindow* instance, int frameless)
+	{
+		instance->SetFrameless(frameless);
+	}
+
 	EXPORTED void WebWindow_SetIconFile(WebWindow* instance, AutoString filename)
 	{
 		instance->SetIconFile(filename);

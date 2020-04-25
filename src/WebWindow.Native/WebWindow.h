@@ -88,6 +88,7 @@ public:
 	void SetMovedCallback(MovedCallback callback) { _movedCallback = callback; }
 	void InvokeMoved(int x, int y) { if (_movedCallback) _movedCallback(x, y); }
 	void SetTopmost(bool topmost);
+	void SetFrameless(bool frameless);
 	void SetIconFile(AutoString filename);
 };
 

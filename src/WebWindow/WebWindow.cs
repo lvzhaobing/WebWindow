@@ -81,6 +81,8 @@ namespace WebWindows
         [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)] static extern void WebWindow_SetPosition(IntPtr instance, int x, int y);
         [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)] static extern void WebWindow_SetMovedCallback(IntPtr instance, MovedCallback callback);
         [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)] static extern void WebWindow_SetTopmost(IntPtr instance, int topmost);
+        [DllImport(DllName, CallingConvention = CallingConvention.Cdecl)] static extern void WebWindow_SetFrameless(IntPtr instance, int frameless);
+
         [DllImport(DllName, CallingConvention = CallingConvention.Cdecl, CharSet = CharSet.Auto)] static extern void WebWindow_SetIconFile(IntPtr instance, string filename);
 
         private readonly List<GCHandle> _gcHandlesToFree = new List<GCHandle>();
@@ -465,6 +467,20 @@ namespace WebWindows
                 {
                     _topmost = value;
                     Invoke(() => WebWindow_SetTopmost(_nativeWebWindow, _topmost ? 1 : 0));
+                }
+            }
+        }
+
+        private bool _frameless = false;
+        public bool Frameless
+        {
+            get => _frameless;
+            set
+            {
+                if (_frameless != value)
+                {
+                    _frameless = value;
+                    Invoke(() => WebWindow_SetFrameless(_nativeWebWindow, _frameless ? 1 : 0));
                 }
             }
         }

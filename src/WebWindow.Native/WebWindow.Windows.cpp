@@ -398,6 +398,14 @@ void WebWindow::SetTopmost(bool topmost)
 	SetWindowPos(_hWnd, topmost ? HWND_TOPMOST : HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
 }
 
+void WebWindow::SetFrameless(bool frameless) 
+{
+	LONG_PTR style = GetWindowLongPtr(_hWnd, GWL_STYLE);
+	if (!frameless) style |= WS_CAPTION | WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_SYSMENU;
+	else style &= ~(WS_CAPTION | WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_SYSMENU);
+	SetWindowLongPtr(_hWnd, GWL_STYLE, style);
+}
+
 void WebWindow::SetIconFile(AutoString filename)
 {
 	HICON icon = (HICON)LoadImage(NULL, filename, IMAGE_ICON, 0, 0, LR_LOADFROMFILE);

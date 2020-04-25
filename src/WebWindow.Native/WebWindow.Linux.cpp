@@ -304,6 +304,11 @@ void WebWindow::SetTopmost(bool topmost)
 	gtk_window_set_keep_above(GTK_WINDOW(_window), topmost ? TRUE : FALSE);
 }
 
+void WebWindow::SetFrameless(bool frameless)
+{
+
+}
+
 void WebWindow::SetIconFile(AutoString filename)
 {
 	gtk_window_set_icon_from_file(GTK_WINDOW(_window), filename, NULL);
