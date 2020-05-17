@@ -6,7 +6,9 @@
 #include <comdef.h>
 #include <atomic>
 #include <Shlwapi.h>
-
+#include <Dwmapi.h>
+#include <Windows.h>
+#include <Windowsx.h>
 #define WM_USER_SHOWMESSAGE (WM_USER + 0x0001)
 #define WM_USER_INVOKE (WM_USER + 0x0002)
 
@@ -31,6 +33,112 @@ struct ShowMessageParams
 	std::wstring body;
 	UINT type;
 };
+
+// we cannot just use WS_POPUP style
+// WS_THICKFRAME: without this the window cannot be resized and so aero snap, de-maximizing and minimizing won't work
+// WS_SYSMENU: enables the context menu with the move, close, maximize, minize... commands (shift + right-click on the task bar item)
+// WS_CAPTION: enables aero minimize animation/transition
+// WS_MAXIMIZEBOX, WS_MINIMIZEBOX: enable minimize/maximize
+enum class Style : DWORD {
+	windowed = WS_OVERLAPPEDWINDOW | WS_THICKFRAME | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_MAXIMIZEBOX,
+	aero_borderless = WS_POPUP | WS_THICKFRAME | WS_CAPTION | WS_SYSMENU | WS_MAXIMIZEBOX | WS_MINIMIZEBOX,
+	basic_borderless = WS_POPUP | WS_THICKFRAME | WS_SYSMENU | WS_MAXIMIZEBOX | WS_MINIMIZEBOX
+};
+
+auto maximized(HWND hwnd) -> bool {
+	WINDOWPLACEMENT placement;
+	if (!::GetWindowPlacement(hwnd, &placement)) {
+		return false;
+	}
+
+	return placement.showCmd == SW_MAXIMIZE;
+}
+
+/* Adjust client rect to not spill over monitor edges when maximized.
+* rect(in/out): in: proposed window rect, out: calculated client rect
+* Does nothing if the window is not maximized.
+*/
+auto adjust_maximized_client_rect(HWND window, RECT& rect) -> void {
+	if (!maximized(window)) {
+		return;
+	}
+
+	auto monitor = ::MonitorFromWindow(window, MONITOR_DEFAULTTONULL);
+	if (!monitor) {
+		return;
+	}
+
+	MONITORINFO monitor_info{};
+	monitor_info.cbSize = sizeof(monitor_info);
+	if (!::GetMonitorInfoW(monitor, &monitor_info)) {
+		return;
+	}
+
+	// when maximized, make the client area fill just the monitor (without task bar) rect,
+	// not the whole window rect which extends beyond the monitor.
+	rect = monitor_info.rcWork;
+}
+
+auto composition_enabled() -> bool {
+	BOOL composition_enabled = FALSE;
+	bool success = ::DwmIsCompositionEnabled(&composition_enabled) == S_OK;
+	return composition_enabled && success;
+}
+
+auto select_borderless_style() -> Style {
+	return composition_enabled() ? Style::aero_borderless : Style::basic_borderless;
+}
+
+auto set_shadow(HWND handle, bool enabled) -> void {
+	if (composition_enabled()) {
+		static const MARGINS shadow_state[2]{ { 0,0,0,0 },{ 1,1,1,1 } };
+		::DwmExtendFrameIntoClientArea(handle, &shadow_state[enabled]);
+	}
+}
+
+auto hit_test(HWND handle, POINT cursor, bool moveable, bool resizable) -> LRESULT {
+	// identify borders and corners to allow resizing the window.
+	// Note: On Windows 10, windows behave differently and
+	// allow resizing outside the visible window frame.
+	// This implementation does not replicate that behavior.
+	const POINT border{
+		::GetSystemMetrics(SM_CXFRAME) + ::GetSystemMetrics(SM_CXPADDEDBORDER),
+		::GetSystemMetrics(SM_CYFRAME) + ::GetSystemMetrics(SM_CXPADDEDBORDER)
+	};
+	RECT window;
+	if (!::GetWindowRect(handle, &window)) {
+		return HTNOWHERE;
+	}
+
+	const auto drag = moveable ? HTCAPTION : HTCLIENT;
+
+	enum region_mask {
+		client = 0b0000,
+		left = 0b0001,
+		right = 0b0010,
+		top = 0b0100,
+		bottom = 0b1000,
+	};
+
+	const auto result =
+		left * (cursor.x < (window.left + border.x)) |
+		right * (cursor.x >= (window.right - border.x)) |
+		top * (cursor.y < (window.top + border.y)) |
+		bottom * (cursor.y >= (window.bottom - border.y));
+
+	switch (result) {
+	case left: return resizable ? HTLEFT : drag;
+	case right: return resizable ? HTRIGHT : drag;
+	case top: return resizable ? HTTOP : drag;
+	case bottom: return resizable ? HTBOTTOM : drag;
+	case top | left: return resizable ? HTTOPLEFT : drag;
+	case top | right: return resizable ? HTTOPRIGHT : drag;
+	case bottom | left: return resizable ? HTBOTTOMLEFT : drag;
+	case bottom | right: return resizable ? HTBOTTOMRIGHT : drag;
+	case client: return drag;
+	default: return HTNOWHERE;
+	}
+}
 
 void WebWindow::Register(HINSTANCE hInstance)
 {
@@ -66,6 +174,9 @@ WebWindow::WebWindow(AutoString title, WebWindow* parent, WebMessageReceivedCall
 		this        // Additional application data
 	);
 	hwndToWebWindow[_hWnd] = this;
+	SetFrameless(false);
+	SetMoveable(true);
+	SetResizable(true);
 }
 
 // Needn't to release the handles.
@@ -74,6 +185,13 @@ WebWindow::~WebWindow() {}
 HWND WebWindow::getHwnd()
 {
 	return _hWnd;
+}
+
+void my_paint(HDC hdc, RECT rc)
+{
+	HBRUSH brush = CreateSolidBrush(RGB(0, 128, 0));
+	FillRect(hdc, &rc, brush);
+	DeleteObject(brush);
 }
 
 LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
@@ -131,6 +249,44 @@ LRESULT CALLBACK WindowProc(HWND hwnd, UINT uMsg, WPARAM wParam, LPARAM lParam)
 			int x, y;
 			webWindow->GetPosition(&x, &y);
 			webWindow->InvokeMoved(x, y);
+		}
+		return 0;
+	}
+	case WM_NCCALCSIZE:
+	{
+		WebWindow* webWindow = hwndToWebWindow[hwnd];
+		if (webWindow) {
+			if (wParam == TRUE && webWindow->GetFrameless()) {
+				auto& params = *reinterpret_cast<NCCALCSIZE_PARAMS*>(lParam);
+				adjust_maximized_client_rect(hwnd, params.rgrc[0]);
+				return 0;
+			}
+		}
+		return 0;
+	}
+
+	case WM_NCHITTEST:
+	{
+		// When we have no border or title bar, we need to perform our
+		// own hit testing to allow resizing and moving.
+		WebWindow* webWindow = hwndToWebWindow[hwnd];
+		if (webWindow) {
+			if (webWindow->GetFrameless()) {
+				return hit_test(hwnd, POINT{
+					GET_X_LPARAM(lParam),
+					GET_Y_LPARAM(lParam) },
+					webWindow->GetMoveable(),
+					webWindow->GetResizable());
+			}
+		}
+		return 0;
+	}
+	case WM_NCACTIVATE:
+	{
+		if (!composition_enabled()) {
+			// Prevents window frame reappearing on window activation
+			// in "basic" theme, where no aero shadow is present.
+			return 1;
 		}
 		return 0;
 	}
@@ -328,14 +484,6 @@ void WebWindow::AddCustomScheme(AutoString scheme, WebResourceRequestedCallback 
 	_schemeToRequestHandler[scheme] = requestHandler;
 }
 
-void WebWindow::SetResizable(bool resizable)
-{
-	LONG_PTR style = GetWindowLongPtr(_hWnd, GWL_STYLE);
-	if (resizable) style |= WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX;
-	else style &= (~WS_THICKFRAME) & (~WS_MINIMIZEBOX) & (~WS_MAXIMIZEBOX);
-	SetWindowLongPtr(_hWnd, GWL_STYLE, style);
-}
-
 void WebWindow::GetSize(int* width, int* height)
 {
 	RECT rect = {};
@@ -398,12 +546,52 @@ void WebWindow::SetTopmost(bool topmost)
 	SetWindowPos(_hWnd, topmost ? HWND_TOPMOST : HWND_NOTOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE);
 }
 
-void WebWindow::SetFrameless(bool frameless) 
+bool WebWindow::GetFrameless()
 {
-	LONG_PTR style = GetWindowLongPtr(_hWnd, GWL_STYLE);
-	if (!frameless) style |= WS_CAPTION | WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_SYSMENU;
-	else style &= ~(WS_CAPTION | WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX | WS_SYSMENU);
-	SetWindowLongPtr(_hWnd, GWL_STYLE, style);
+	return _frameless;
+}
+
+void WebWindow::SetFrameless(bool frameless)
+{
+	Style new_style = (frameless) ? select_borderless_style() : Style::windowed;
+	Style old_style = static_cast<Style>(::GetWindowLongPtrW(_hWnd, GWL_STYLE));
+
+	if (new_style != old_style) {
+		_frameless = frameless;
+
+		::SetWindowLongPtrW(_hWnd, GWL_STYLE, static_cast<LONG>(new_style));
+
+		// when switching between borderless and windowed, restore appropriate shadow state
+		set_shadow(_hWnd, new_style != Style::windowed);
+
+		// redraw frame
+		::SetWindowPos(_hWnd, nullptr, 0, 0, 0, 0, SWP_FRAMECHANGED | SWP_NOMOVE | SWP_NOSIZE);
+		::ShowWindow(_hWnd, SW_SHOW);
+	}
+}
+
+bool WebWindow::GetMoveable()
+{
+	return _moveable;
+}
+
+void WebWindow::SetMoveable(bool moveable)
+{
+	_moveable = moveable;
+}
+
+bool WebWindow::GetResizable()
+{
+	return _resizable;
+}
+
+void WebWindow::SetResizable(bool resizable)
+{
+	_resizable = resizable;
+	/*LONG_PTR style = GetWindowLongPtr(_hWnd, GWL_STYLE);
+	if (resizable) style |= WS_THICKFRAME | WS_MINIMIZEBOX | WS_MAXIMIZEBOX;
+	else style &= (~WS_THICKFRAME) & (~WS_MINIMIZEBOX) & (~WS_MAXIMIZEBOX);
+	SetWindowLongPtr(_hWnd, GWL_STYLE, style);*/
 }
 
 void WebWindow::SetIconFile(AutoString filename)

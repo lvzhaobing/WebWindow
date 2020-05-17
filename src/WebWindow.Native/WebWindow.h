@@ -56,7 +56,12 @@ private:
 	void AttachWebView();
 #endif
 
+private:
+	bool _frameless;
+	bool _moveable;
+	bool _resizable;
 public:
+
 #ifdef _WIN32
 	static void Register(HINSTANCE hInstance);
 	HWND getHwnd();
@@ -76,7 +81,6 @@ public:
 	void NavigateToString(AutoString content);
 	void SendMessage(AutoString message);
 	void AddCustomScheme(AutoString scheme, WebResourceRequestedCallback requestHandler);
-	void SetResizable(bool resizable);
 	void GetSize(int* width, int* height);
 	void SetSize(int width, int height);
 	void SetResizedCallback(ResizedCallback callback) { _resizedCallback = callback; }
@@ -88,7 +92,16 @@ public:
 	void SetMovedCallback(MovedCallback callback) { _movedCallback = callback; }
 	void InvokeMoved(int x, int y) { if (_movedCallback) _movedCallback(x, y); }
 	void SetTopmost(bool topmost);
+	
+	bool GetFrameless();
 	void SetFrameless(bool frameless);
+	
+	bool GetMoveable();
+	void SetMoveable(bool moveable);
+
+	bool GetResizable();
+	void SetResizable(bool resizable);
+
 	void SetIconFile(AutoString filename);
 };
 
